@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, session, url_for
 import joblib
 import random
 import matplotlib
@@ -9,22 +9,18 @@ import os
 app = Flask(__name__)
 app.secret_key = "secret123"
 
-# Load model
 model = joblib.load("model.pkl")
 
-# Dummy users
 users = {"admin": "1234"}
 
-
-# 🔐 LOGIN
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        user = request.form["username"]
-        pwd = request.form["password"]
+        username = request.form["username"]
+        password = request.form["password"]
 
-        if user in users and users[user] == pwd:
-            session["user"] = user
+        if username in users and users[username] == password:
+            session["user"] = username
             return redirect(url_for("home"))
         else:
             return render_template("login.html", error="Invalid Credentials")
@@ -32,81 +28,80 @@ def login():
     return render_template("login.html")
 
 
-# 📝 SIGNUP
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
-        user = request.form["username"]
-        pwd = request.form["password"]
-        users[user] = pwd
+        username = request.form["username"]
+        password = request.form["password"]
+        users[username] = password
         return redirect(url_for("login"))
 
     return render_template("signup.html")
 
 
-# 🚪 LOGOUT
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect(url_for("login"))
+    return redirect("/login")
 
 
-# 🏠 DASHBOARD
 @app.route("/", methods=["GET", "POST"])
 def home():
     if "user" not in session:
-        return redirect(url_for("login"))
+        return redirect("/login")
 
     result = None
     prob = None
+    risk_level = "-"
 
     if request.method == "POST":
-        values = list(request.form.values())
+        amount = request.form["amount"]
+        time = request.form["time"]
+        location = request.form["location"]
 
-        if any(v.strip() == "" for v in values[:3]):
-            result = "Please fill all fields"
-            return render_template("index.html", result=result)
+        try:
+            features = [float(amount), float(time), float(location)]
+        except:
+            features = [random.uniform(0,1), random.uniform(0,1), random.uniform(0,1)]
 
-        # Prepare features
-        features = []
-        for x in values:
-            try:
-                features.append(float(x))
-            except:
-                features.append(random.uniform(-1, 1))
-
-        # Prediction
         raw_prob = model.predict_proba([features])[0][1]
         display_prob = min(raw_prob * 20, 1.0)
-        prob = display_prob * 100
+        prob = round(display_prob * 100, 2)
 
-        # Update stats
-        session["total_transactions"] = session.get("total_transactions", 0) + 1
-
-        if display_prob > 0.3:
-            session["fraud_count"] = session.get("fraud_count", 0) + 1
-            result = f"Fraud ({prob:.2f}%)"
+        # Risk classification
+        if prob < 30:
+            risk_level = "Low"
+            result = f"Safe ({prob}%)"
+        elif prob < 60:
+            risk_level = "Medium"
+            result = f"Fraud ({prob}%)"
         else:
-            result = f"Safe ({prob:.2f}%)"
+            risk_level = "High"
+            result = f"Fraud ({prob}%)"
 
-        # Save history
+        # Stats
+        session["total_transactions"] = session.get("total_transactions", 0) + 1
+        if prob > 30:
+            session["fraud_count"] = session.get("fraud_count", 0) + 1
+
+        # History
         if "history" not in session:
             session["history"] = []
 
         session["history"].append({
-            "amount": values[0],
-            "time": values[1],
-            "location": values[2],
+            "amount": amount,
+            "time": time,
+            "location": location,
             "result": result,
-            "prob": round(prob, 2)
+            "prob": prob
         })
 
-        # 📊 Generate graph
+        # Graph
         labels = ["Safe", "Fraud"]
-        values_chart = [100 - prob, prob]
+        values = [100 - prob, prob]
 
         plt.figure()
-        plt.bar(labels, values_chart)
+        plt.bar(labels, values)
         plt.title("Fraud Analysis")
 
         if not os.path.exists("static"):
@@ -119,8 +114,9 @@ def home():
         "index.html",
         result=result,
         prob=prob,
-        total_transactions=session.get("total_transactions", 0),
-        fraud_count=session.get("fraud_count", 0),
+        risk=risk_level,
+        total=session.get("total_transactions", 0),
+        fraud=session.get("fraud_count", 0),
         history=session.get("history", [])
     )
 
